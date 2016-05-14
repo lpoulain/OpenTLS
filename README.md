@@ -8,7 +8,7 @@ This is a simple HTTPS client implementing TLS 1.2. It supports right now the fo
 
 It is also checking the validity of the whole SSL certificate chain, down to its own list of Root Certificates (stored in root_certificates.pem)
 
-**WARNING**: as most security software, this code should NOT be considered secured. Its use is mostly educational (if you want to learn about how TLS works) and/or if you want to access Website which only support HTTPS.
+**WARNING**: as most crypto software, this code should NOT be considered secured (it is extremely difficult to implement really secure software that uses cryptography). Its use is mostly educational (if you want to learn about how TLS works) and/or if you want to access Website which only support HTTPS.
 
 ### Requirements
 
