@@ -3,6 +3,7 @@ import socket
 import sys
 import binascii
 import traceback
+import itertools
 
 from Crypto.Hash import *
 from Crypto.Cipher import AES
@@ -12,6 +13,8 @@ from Crypto.PublicKey import RSA
 from KeyExchange import *
 from Common import *
 from Certificate import Certificate, load_root_CAs
+from BlockCipher import AES_CBC, AES_GCM
+
 
 TLS_HANDSHAKE 			= 22
 TLS_APPLICATION_DATA 	= 23
@@ -24,103 +27,6 @@ TLS_CERTIFICATE 				= 11
 TLS_SERVER_KEY_EXCHANGE			= 12
 TLS_SERVER_HELLO_DONE 			= 14
 TLS_CLIENT_KEY_EXCHANGE			= 16
-
-
-def Hash(data):
-    h = SHA256.new()
-    h.update(data)
-    return h.digest()
-
-def HMAC_hash(secret, val):
-    h = HMAC.new(secret, digestmod=SHA256)
-    h.update(val)
-    return h.digest()
-
-def P_hash(secret, seed, size):
-    A = seed
-    result = ''
-    while size > 0:
-        A = HMAC_hash(secret, A)
-        result += HMAC_hash(secret, A+seed)
-        size -= 20
-        
-    return result
-
-def PRF(secret, label, seed, size):
-    return P_hash(secret, label+seed, size)[0:size]
-
-
-############################################################################
-# AES 128-bit CBC encryption
-############################################################################
-
-def decrypt(message, key_AES, key_MAC, seq_num, content_type, debug=False):
-	iv = message[0:16]
-	cipher = AES.new(key_AES, AES.MODE_CBC, iv)
-	decoded = cipher.decrypt(message[16:])
-
-	padding = to_int(decoded[-1:]) + 1
-	plaintext = decoded[0:-padding-20]
-	mac_decrypted = decoded[-padding-20:-padding]
-
-	hmac = HMAC.new(key_MAC, digestmod=SHA)
-	plaintext_to_mac = to_n_bytes(seq_num, 8) + to_n_bytes(content_type, 1) + '\x03\x03' + to_n_bytes(len(plaintext), 2) + plaintext
-	hmac.update(plaintext_to_mac)
-	mac_computed = hmac.digest()
-
-	if debug:
-		print('Plaintext: [' + plaintext + ']')
-		print('MAC (decrypted): ' + to_hex(mac_decrypted))
-		print('MAC (computed):  ' + to_hex(mac_computed))
-		print('')
-
-	return plaintext
-
-
-def encrypt(plaintext, iv, key_AES, key_MAC, seq_num, content_type):
-    hmac = HMAC.new(key_MAC, digestmod=SHA)
-    plaintext_to_mac = to_n_bytes(seq_num, 8) + to_n_bytes(content_type, 1) + '\x03\x03' + to_n_bytes(len(plaintext), 2) + plaintext
-    hmac.update(plaintext_to_mac)
-    mac_computed = hmac.digest()
-
-    cipher = AES.new(key_AES, AES.MODE_CBC, iv)
-    plaintext += mac_computed
-    padding_length = 16 - (len(plaintext) % 16)
-    if padding_length == 0:
-    	padding_length = 16
-
-    padding = chr(padding_length - 1) * padding_length
-#    print(to_hex())
-    ciphertext = cipher.encrypt(plaintext + padding)
-
-    return ciphertext
-
-
-############################################################################
-# TLS
-############################################################################
-
-TLS_RSA_WITH_AES_128_CBC_SHA 		= '002f'
-TLS_DHE_RSA_WITH_AES_128_CBC_SHA 	= '0033'
-TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA	= 'c013'
-
-cipher_suites = {
-	TLS_RSA_WITH_AES_128_CBC_SHA: {
-		'name': 'TLS_RSA_WITH_AES_128_CBC_SHA',
-		'key_size': 128,
-		'key_exchange': RSA_Key_Exchange
-	},
-	TLS_DHE_RSA_WITH_AES_128_CBC_SHA: {
-		'name': 'TLS_DHE_RSA_WITH_AES_128_CBC_SHA',
-		'key_size': 128,
-		'key_exchange': DHE_RSA_Key_Exchange
-	},
-	TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA: {
-		'name': 'TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA',
-		'key_size': 128,
-		'key_exchange': ECDHE_RSA_Key_Exchange
-	},
-}
 
 TLS_alert = {
 	0: 'close_notify',
@@ -150,9 +56,98 @@ TLS_alert = {
 	255: 'unsupported_extension'
 }
 
+
+############################################################################
+# Cipher Suites
+############################################################################
+
+class CipherSuite:
+	def __init__(self, name):
+		self.name = name
+
+# Instead of manually entering all the cipher suites details, we go through
+# globals() to get the list of variables that look like cipher suites
+# (TLS_..._WITH_...) and try to parse them to figure out the key exchange,
+# key size, AES mode and authentication method
+
+TLS_RSA_WITH_AES_128_CBC_SHA 			= '002f'
+TLS_RSA_WITH_AES_128_CBC_SHA256			= '003c'
+TLS_RSA_WITH_AES_256_CBC_SHA256			= '003d'
+TLS_DHE_RSA_WITH_AES_128_CBC_SHA 		= '0033'
+TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA 		= 'c013'
+TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA 		= 'c014'
+TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256	= 'c027'
+TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384	= 'c028'
+#TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 = '009e'
+#TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 = 'c02f'
+
+def parse_cipher_suite(name, code):
+	global cipher_suites
+
+	cipher_suite = CipherSuite(name)
+
+	try:
+		# Exchange key
+		if name.startswith('TLS_RSA_WITH'):
+			cipher_suite.key_exchange = RSA_Key_Exchange
+		elif name.startswith('TLS_DHE_RSA_WITH'):
+			cipher_suite.key_exchange = DHE_RSA_Key_Exchange
+		elif name.startswith('TLS_ECDHE_RSA_WITH'):
+			cipher_suite.key_exchange = ECDHE_RSA_Key_Exchange
+		else:
+			raise Exception("Unknown key exchange in cipher suite " + name)
+
+		# Key size
+		if 'WITH_AES_128_' in name:
+			cipher_suite.key_size = 128
+		elif 'WITH_AES_256_' in name:
+			cipher_suite.key_size = 256
+		else:
+			raise Exception("Unknown key size in cipher suite " + name)
+
+		# Block Cipher
+		if 'WITH_AES_128_CBC_' in name or 'WITH_AES_256_CBC_':
+			cipher_suite.block_cipher = AES_CBC
+		elif 'WITH_AES_128_GCM_' in name or 'WITH_AES_256_GCM_':
+			cipher_suite.block_cipher = AES_GCM
+		else:
+			raise Exception('Unknown block cipher in cipher suite ' + name)
+
+		# Message authentication
+		if name.endswith('_SHA'):
+			cipher_suite.msg_auth = SHA
+		elif name.endswith('_SHA256'):
+			cipher_suite.msg_auth = SHA256
+		elif name.endswith('_SHA384'):
+			cipher_suite.msg_auth = SHA384
+		else:
+			raise Exception("Unknown message authentication in cipher suite " + name)
+
+	except:
+		return
+
+	cipher_suites[code] = cipher_suite
+
+def init_cipher_suites():
+	global cipher_suites
+
+	cipher_suites = {}
+
+	cipher_suite_variables = { name: value for (name, value) in globals().items() if name.startswith('TLS_') and '_WITH_' in name }
+	
+	for name, value in cipher_suite_variables.items():
+		parse_cipher_suite(name, value)
+
+init_cipher_suites()
+
+
+############################################################################
+# TLS
+############################################################################
+
 class TLS:
 	def __init__(self, host, port=443, cipher=None):
-		self.cipher_suite = cipher
+		self.cipher_suite_code = cipher
 
 		self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.ip = (host, port)
@@ -180,6 +175,24 @@ class TLS:
 			print("Closing the connection")
 			self.sock.close()
 
+	def HMAC_hash(self, secret, val):
+	    h = HMAC.new(secret, digestmod=self.PRF_hash)
+	    h.update(val)
+	    return h.digest()
+
+	def P_hash(self, secret, seed, size):
+	    A = seed
+	    result = ''
+	    while size > 0:
+	        A = self.HMAC_hash(secret, A)
+	        result += self.HMAC_hash(secret, A+seed)
+	        size -= self.PRF_hash.digest_size
+	        
+	    return result
+
+	def PRF(self, secret, label, seed, size):
+	    return self.P_hash(secret, label+seed, size)[0:size]
+
 	def handle_alert(self, msg):
 		alert = "TLS Server Alert: " + TLS_alert[to_int(msg[1])]
 		if msg[0] == '\x02':
@@ -190,14 +203,15 @@ class TLS:
 	def TLS_record(self, content_type, message):
 		return chr(content_type) + to_bytes(0x0303) + to_n_bytes(len(message), 2) + message
 
+
 	# Client Hello message
 	def send_client_hello(self):
 		client_hello = '010001fc03035716eaceec93895c4a18d31c5f379bb305b432082939b83ee09f9a96babe0a400000'
 
-		if self.cipher_suite is None:
-			client_hello += '06' + TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA + TLS_DHE_RSA_WITH_AES_128_CBC_SHA + TLS_RSA_WITH_AES_128_CBC_SHA
+		if self.cipher_suite_code is None:
+			client_hello += to_hex(to_bytes(len(cipher_suites)*2)) + ''.join(cipher_suites.keys())
 		else:
-			client_hello += '02' + self.cipher_suite
+			client_hello += '02' + self.cipher_suite_code
 
 		client_hello += '0100'
 		client_hello = client_hello.decode('hex')
@@ -226,6 +240,7 @@ class TLS:
 		self.handshake_messages.append(client_hello)
 		msg = self.TLS_record(TLS_HANDSHAKE, client_hello)
 		self.sock.sendall(msg)
+
 
 	# Server Handshake messages (Server Hello, Certificates, Server Key Exchange, Server Hello Done)
 	def receive_server_hello(self):
@@ -278,15 +293,18 @@ class TLS:
 		self.certificate = Certificate(server_certificate[7:])
 
 		session_ID_length = to_int(server_hello[38])
-		chosen_cipher_suite = server_hello[39+session_ID_length:41+session_ID_length].encode('hex')
-		print('Cipher suite: ' + cipher_suites[chosen_cipher_suite]['name'])
-		self.key_exchange = cipher_suites[chosen_cipher_suite]['key_exchange'](server_key_exchange)
+
+		cipher_suite_code = server_hello[39+session_ID_length:41+session_ID_length].encode('hex')
+		self.cipher_suite = cipher_suites[cipher_suite_code]
+		print('Cipher suite: ' + self.cipher_suite.name)
+		self.key_exchange = self.cipher_suite.key_exchange(server_key_exchange if server_key_exchange is not None else self.certificate)
+		self.PRF_hash = SHA384 if self.cipher_suite.msg_auth == SHA384 else SHA256
 
 		# Verify the certificate
 		# RSA key exchange, there is no key exchange parameters to verify
 		if server_key_exchange is None:
 			server_key_exchange = self.certificate
-			self.certificate.verify(None, None, domain=self.ip[0])
+			self.certificate.verify(None, None, None, domain=self.ip[0])
 		# Diffie-Hellman key exchange - start with verifying the key exchange parameters
 		else:
 			signed_data = self.client_random + self.server_random + server_key_exchange[4:-260]
@@ -313,36 +331,34 @@ class TLS:
 		self.handshake_messages.append(client_key_exchange)
 		self.client_key_exchange_msg = self.TLS_record(TLS_HANDSHAKE, client_key_exchange)
 
-		self.master_secret = PRF(to_bytes(self.premaster_secret), "master secret", self.client_random + self.server_random, 48)
+		self.master_secret = self.PRF(to_bytes(self.premaster_secret), "master secret", self.client_random + self.server_random, 48)
 
-		keys = PRF(self.master_secret, "key expansion", self.server_random + self.client_random, 20 + 20 + 32 + 32)
-		self.client_write_MAC_key = keys[0:20]
-		self.server_write_MAC_key = keys[20:40]
-		self.client_write_key = keys[40:56]
-		self.server_write_key = keys[56:72]
-		self.client_write_IV = keys[72:88]
-		self.server_write_IV = keys[88:102]
+		keys = self.PRF(self.master_secret, "key expansion", self.server_random + self.client_random, self.cipher_suite.msg_auth.digest_size*2 + 32 + 32)
+
+		self.BlockCipher = self.cipher_suite.block_cipher(keys=keys, key_size=self.cipher_suite.key_size, hash=self.cipher_suite.msg_auth)
+
 
 	def send_client_change_cipher_suite(self):
 		self.client_change_cipher_spec_msg = self.TLS_record(TLS_CHANGE_CIPHER_SPEC, '01'.decode('hex'))
 
+
 	def send_client_encrypted_handshake(self):
 		handshake = ''.join(self.handshake_messages)
-		h = SHA256.new()
+		h = self.PRF_hash.new()
 		h.update(handshake)
 
-		client_handshake_hash_computed = '\x14\x00\x00\x0c' + PRF(self.master_secret, "client finished", h.digest(), 12)
+		client_handshake_hash_computed = '\x14\x00\x00\x0c' + self.PRF(self.master_secret, "client finished", h.digest(), 12)
 		self.handshake_messages.append(client_handshake_hash_computed)
 
-		client_encrypted_handshake = self.client_write_IV + \
-										 encrypt(client_handshake_hash_computed, self.client_write_IV, self.client_write_key, self.client_write_MAC_key, 0, TLS_HANDSHAKE)
+		client_encrypted_handshake = self.BlockCipher.encrypt(client_handshake_hash_computed, seq_num=0, content_type=TLS_HANDSHAKE)
+#										 encrypt(client_handshake_hash_computed, self.client_write_IV, self.client_write_key, self.client_write_MAC_key, 0, TLS_HANDSHAKE)
 		client_encrypted_handshake_msg = self.TLS_record(TLS_HANDSHAKE, client_encrypted_handshake)
 
 		self.sock.sendall(self.client_key_exchange_msg + self.client_change_cipher_spec_msg)
 		self.sock.sendall(client_encrypted_handshake_msg)
 
 	# Server Change Cipher Spec and Server Encrypted Handhsake message
-	# (ignored right now)
+	# (ignored right now except for TLS Alert)
 	def receive_server_end_handshake(self):
 		server_msg = self.sock.recv(65536)
 		idx = 0
@@ -362,7 +378,7 @@ class TLS:
 	def sends_GET_request(self):
 		plaintext = 'GET / HTTP/1.1\r\nHOST: ' + self.ip[0] + '\r\n\r\n'
 		print("Sending [" + plaintext + "]")
-		ciphertext = self.client_write_IV + encrypt(plaintext, self.client_write_IV, self.client_write_key, self.client_write_MAC_key, seq_num=1, content_type=TLS_APPLICATION_DATA)
+		ciphertext = self.BlockCipher.encrypt(plaintext, seq_num=1, content_type=TLS_APPLICATION_DATA)
 
 		client_data_msg = self.TLS_record(TLS_APPLICATION_DATA, ciphertext)
 		self.sock.sendall(client_data_msg)
@@ -379,6 +395,7 @@ class TLS:
 		content_length = None
 
 		idx = 0
+		seq_num = 1
 
 		while bytes_received < bytes_expected or need_to_download_more:
 			msg = self.sock.recv(65536)
@@ -395,7 +412,8 @@ class TLS:
 					bytes_received += len(msg)
 
 				# Decrypt
-				plaintext = decrypt(app_data[idx+5:idx+5+size], self.server_write_key, self.server_write_MAC_key, 2, 23)
+				plaintext = self.BlockCipher.decrypt(app_data[idx+5:idx+5+size], seq_num=seq_num, content_type=TLS_APPLICATION_DATA)
+				seq_num += 1
 
 				if content_length is None:
 					length_start_idx = plaintext.find('Content-Length:')
@@ -459,13 +477,13 @@ for arg in sys.argv[1:]:
 			port = int(arg)
 			is_next = None
 		elif is_next == 'cipher':
-			cipher = next((k for k, c in cipher_suites.items() if c['name'] == arg), None)
+			cipher = next((k for k, c in cipher_suites.items() if c.name == arg), None)
 			if cipher is None:
 				print('Unknown cipher suite: %s' % arg)
 				print('')
 				print("Cipher suites supported:")
 				for cipher in cipher_suites.itervalues():
-					print('- ' + cipher['name'])
+					print('- ' + cipher.name)
 				print('')				
 				quit()
 			is_next = 'hostname'
@@ -474,8 +492,8 @@ if hostname is None:
 	print('%s [-cipher <cipher suite>] <hostname> [port]' % sys.argv[0])
 	print('')
 	print("Cipher suites supported:")
-	for cipher in cipher_suites.itervalues():
-		print('- ' + cipher[0])
+	for cipher in cipher_suites.values():
+		print('- ' + cipher.name)
 	print('')	
 	quit()
 

@@ -1,14 +1,19 @@
-# OpenTLS: a simple HTTPS client in Python
+# OpenTLS: a HTTPS client in Python
 
-This is a simple HTTPS client implementing TLS 1.2. It supports right now the following cipher suites:
+This is a HTTPS client implementing TLS 1.2. It supports right now the following cipher suites:
 
-- TLS\_ECDHE\_RSA\_WITH\_AES\_128\_CBC\_SHA (secp256r1 and secp384r1 elliptic curves)
-- TLS\_DHE\_RSA\_WITH\_AES\_128\_CBC\_SHA
 - TLS\_RSA\_WITH\_AES\_128\_CBC\_SHA
+- TLS\_RSA\_WITH\_AES\_128\_CBC\_SHA256
+- TLS\_RSA\_WITH\_AES\_256\_CBC\_SHA256
+- TLS\_DHE\_RSA\_WITH\_AES\_128\_CBC\_SHA
+- TLS\_ECDHE\_RSA\_WITH\_AES\_128\_CBC\_SHA
+- TLS\_ECDHE\_RSA\_WITH\_AES\_256\_CBC\_SHA
+- TLS\_ECDHE\_RSA\_WITH\_AES\_128\_CBC\_SHA256
+- TLS\_ECDHE\_RSA\_WITH\_AES\_256\_CBC\_SHA384
 
 It is also checking the validity of the whole SSL certificate chain, down to its own list of Root Certificates (stored in root_certificates.pem)
 
-**WARNING**: as most crypto software, this code should NOT be considered secured (it is extremely difficult to implement really secure software that uses cryptography). Its use is mostly educational (if you want to learn about how TLS works) and/or if you want to access Website which only support HTTPS.
+**WARNING**: as most crypto software, this code should NOT be considered 100% secured (it is extremely difficult to implement really secure software that uses cryptography). Its use is mostly educational (if you want to learn about how TLS works), if you want to pentest a system and/or if you want to access Website which only support HTTPS.
 
 ### Requirements
 
@@ -18,8 +23,7 @@ It is also checking the validity of the whole SSL certificate chain, down to its
 
 #### Future improvements
 
+- Galois Counter Mode (GCM) support
 - Python 3 support
 - Better management of HTTP response
-- AES 256-bit support
-- Galois Counter Mode (GCM) support
 - Verification of the server-sent MAC and Encrypted Handshake Message
