@@ -14,12 +14,6 @@ elliptic_curves = {
 class RSA_Key_Exchange:
 	def __init__(self, certificate):
 		self.certificate = certificate
-#		cert_size = to_int(certificates[7:10])
-#		print('cert size: ', cert_size)
-#		certificate, _ = ASN1(certificates[10:10+cert_size])
-
-#		self.RSA_n = to_int(certificate[0][6][1][0])
-#		self.RSA_e = to_int(certificate[0][6][1][1])
 
 	def get_premaster_secret(self):
 		self.premaster_secret = TLS_VERSION + os.urandom(46)
