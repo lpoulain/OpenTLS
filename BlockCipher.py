@@ -68,7 +68,7 @@ class AES_CBC:
 
 
 #######################
-### Galois Counter Mode (not working yet)
+### Galois Counter Mode
 #######################
 
 class AES_GCM:
@@ -76,10 +76,10 @@ class AES_GCM:
 		key_size /= 8
 		hash_size = hash.digest_size
 
-		self.client_AES_key = keys[2*hash_size:2*hash_size+key_size]
-		self.server_AES_key = keys[2*hash_size+key_size:2*hash_size+2*key_size]
-		self.client_IV = keys[2*hash_size+2*key_size : 2*hash_size+2*key_size+4]
-		self.server_IV = keys[2*hash_size+2*key_size+16 : 2*hash_size+2*key_size+20]
+		self.client_AES_key = keys[0 : key_size]
+		self.server_AES_key = keys[key_size : 2*key_size]
+		self.client_IV = keys[2*key_size : 2*key_size+4]
+		self.server_IV = keys[2*key_size+4 : 2*key_size+8]
 
 		cipher = AES.new(self.client_AES_key, AES.MODE_ECB)
 		self.H = to_int(cipher.encrypt('\x00'*16))
@@ -101,30 +101,39 @@ class AES_GCM:
 	def GHASH(self, A, C):
 		C_len = len(C)
 		A_padded = to_int(A + '\x00' * (16 - len(A) % 16))
-		C += '\x00' * (16 - C_len % 16)
+		if C_len % 16 != 0:
+			C += '\x00' * (16 - C_len % 16)
 
 		tag = self.H_mult(A_padded)
 
 		for i in range(0, len(C) / 16):
 			tag ^= to_int(C[i*16:i*16+16])
 			tag = self.H_mult(tag)
-#			print('tag: ' + to_hex(to_bytes(tag)))
 
 		tag ^= to_int(to_n_bytes(8*len(A), 8) + to_n_bytes(8*C_len, 8))
-#		print('tag 2: ' + to_hex(to_bytes(tag)))
 		tag = self.H_mult(tag)
-#		print('tag 2: ' + to_hex(to_bytes(tag)))
 
 		return tag
 
 
 	def decrypt(self, ciphertext, seq_num, content_type, debug=False):
-		iv = self.server_IV + message[0:8]
+		iv = self.server_IV + ciphertext[0:8]
 
 		counter = Counter.new(nbits=32, prefix=iv, initial_value=2, allow_wraparound=False)
-		cipher = AES.new(self.client_AES_key, AES.MODE_CTR, counter=counter)
-		plaintext = cipher.decrypt(ciphertext)
+		cipher = AES.new(self.server_AES_key, AES.MODE_CTR, counter=counter)
+		plaintext = cipher.decrypt(ciphertext[8:-16])
 
+		"""
+		# Computing the tag is actually pretty long, so commenting that out
+		auth_data = to_n_bytes(seq_num, 8) + to_n_bytes(content_type, 1) + TLS_VERSION + to_n_bytes(len(ciphertext)-8-16, 2)
+		auth_tag = self.GHASH(auth_data, ciphertext[8:-16])
+		auth_tag ^= to_int(AES.new(self.server_AES_key, AES.MODE_ECB).encrypt(iv + '\x00'*3 + '\x01'))
+		auth_tag = to_bytes(auth_tag)
+
+		print('Auth tag (from server): ' + to_hex(ciphertext[-16:]))
+		print('Auth tag (from client): ' + to_hex(auth_tag))
+		"""
+		
 		return plaintext
 
 	def encrypt(self, plaintext, seq_num, content_type):
@@ -137,17 +146,17 @@ class AES_GCM:
 		ciphertext = cipher.encrypt(plaintext)
 
 		# Compute the Authentication Tag
-		auth_data = to_n_bytes(seq_num, 8) + to_n_bytes(content_type, 1) + TLS_VERSION + to_n_bytes(len(ciphertext)+16, 2)
+		auth_data = to_n_bytes(seq_num, 8) + to_n_bytes(content_type, 1) + TLS_VERSION + to_n_bytes(plaintext_size, 2)
 		auth_tag = self.GHASH(auth_data, ciphertext)
-#		auth_tag ^= to_int(AES.new(self.client_AES_key, AES.MODE_ECB).encrypt(iv + '\x00'*3 + '\x00'))
-#		auth_tag ^= to_int(AES.new(self.client_AES_key, AES.MODE_ECB).encrypt(iv + '\x00'*3 + '\x01'))
-		auth_tag ^= to_int(AES.new(self.client_AES_key, AES.MODE_ECB).encrypt('\x00'*4 + iv))
+		auth_tag ^= to_int(AES.new(self.client_AES_key, AES.MODE_ECB).encrypt(iv + '\x00'*3 + '\x01'))
 		auth_tag = to_bytes(auth_tag)
-#		print('IV: ' + to_hex(iv + '\x00'*3 + '\x01'))
 
 #		print('Auth key: ' + to_hex(to_bytes(self.H)))
-#		print('Plaintext: ' + to_hex(plaintext))
+#		print('IV:         ' + to_hex(iv))
+#		print('Key:        ' + to_hex(self.client_AES_key))
+#		print('Plaintext:  ' + to_hex(plaintext))
 #		print('Ciphertext: ' + to_hex(ciphertext))
-#		print('Auth tag: ' + to_hex(auth_tag))
+#		print('Auth tag:   ' + to_hex(auth_tag))
+#		print('Exp. tag:   a47e230af268378c4f33c8b5bab3d26d')
 
 		return iv[4:] + ciphertext + auth_tag

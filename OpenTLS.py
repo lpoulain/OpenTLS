@@ -71,15 +71,23 @@ class CipherSuite:
 # key size, AES mode and authentication method
 
 TLS_RSA_WITH_AES_128_CBC_SHA 			= '002f'
+TLS_RSA_WITH_AES_256_CBC_SHA 			= '0035'
 TLS_RSA_WITH_AES_128_CBC_SHA256			= '003c'
 TLS_RSA_WITH_AES_256_CBC_SHA256			= '003d'
+TLS_RSA_WITH_AES_128_GCM_SHA256 		= '009c'
+TLS_RSA_WITH_AES_256_GCM_SHA384 		= '009d'
 TLS_DHE_RSA_WITH_AES_128_CBC_SHA 		= '0033'
+TLS_DHE_RSA_WITH_AES_256_CBC_SHA 		= '0039'
+TLS_DHE_RSA_WITH_AES_128_CBC_SHA256 	= '0067'
+TLS_DHE_RSA_WITH_AES_256_CBC_SHA256 	= '006B'
+TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 	= '009e'
+TLS_DHE_RSA_WITH_AES_256_GCM_SHA384 	= '009f'
 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA 		= 'c013'
 TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA 		= 'c014'
 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256	= 'c027'
 TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384	= 'c028'
-#TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 = '009e'
-#TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 = 'c02f'
+TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 	= 'c02f'
+TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 	= 'c030'
 
 def parse_cipher_suite(name, code):
 	global cipher_suites
@@ -106,9 +114,9 @@ def parse_cipher_suite(name, code):
 			raise Exception("Unknown key size in cipher suite " + name)
 
 		# Block Cipher
-		if 'WITH_AES_128_CBC_' in name or 'WITH_AES_256_CBC_':
+		if 'WITH_AES_128_CBC_' in name or 'WITH_AES_256_CBC_' in name:
 			cipher_suite.block_cipher = AES_CBC
-		elif 'WITH_AES_128_GCM_' in name or 'WITH_AES_256_GCM_':
+		elif 'WITH_AES_128_GCM_' in name or 'WITH_AES_256_GCM_' in name:
 			cipher_suite.block_cipher = AES_GCM
 		else:
 			raise Exception('Unknown block cipher in cipher suite ' + name)
@@ -333,6 +341,11 @@ class TLS:
 
 		self.master_secret = self.PRF(to_bytes(self.premaster_secret), "master secret", self.client_random + self.server_random, 48)
 
+		# TESTING GCM
+#		self.master_secret = '2FB179AB70CD4CA2C1285B4B1E294F8F44B7E8DA26B62D00EE35181575EAB04C4FA11C0DA3ABABB4AF8D09ACB4CCC3CD'.decode('hex')
+#		self.client_random = '375f5632ba9075b88dd83eeeed4adb427d4011298efb79fb2bf78f4a4b7d9d95'.decode('hex')
+#		self.server_random = '5a1b3957e3bd1644e7083e25c64f137ed2803b680e43395a82e5b302b64ba763'.decode('hex')
+
 		keys = self.PRF(self.master_secret, "key expansion", self.server_random + self.client_random, self.cipher_suite.msg_auth.digest_size*2 + 32 + 32)
 
 		self.BlockCipher = self.cipher_suite.block_cipher(keys=keys, key_size=self.cipher_suite.key_size, hash=self.cipher_suite.msg_auth)
@@ -351,7 +364,6 @@ class TLS:
 		self.handshake_messages.append(client_handshake_hash_computed)
 
 		client_encrypted_handshake = self.BlockCipher.encrypt(client_handshake_hash_computed, seq_num=0, content_type=TLS_HANDSHAKE)
-#										 encrypt(client_handshake_hash_computed, self.client_write_IV, self.client_write_key, self.client_write_MAC_key, 0, TLS_HANDSHAKE)
 		client_encrypted_handshake_msg = self.TLS_record(TLS_HANDSHAKE, client_encrypted_handshake)
 
 		self.sock.sendall(self.client_key_exchange_msg + self.client_change_cipher_spec_msg)
