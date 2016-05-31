@@ -27,12 +27,11 @@ It is also checking the validity of the whole SSL certificate chain, down to its
 
 ### Requirements
 
-- Python 2.7
+- Works with Python 2.7 and 3
 - [Pycrypto](https://www.dlitz.net/software/pycrypto/)
 - [TinyEC](https://pypi.python.org/pypi/tinyec)
 
 #### Future improvements
 
-- Python 3 support
 - Better management of HTTP response
 - Verification of the server-sent MAC and Encrypted Handshake Message

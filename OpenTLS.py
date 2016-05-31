@@ -1,7 +1,6 @@
 import os
 import socket
 import sys
-import binascii
 import traceback
 import itertools
 
@@ -12,7 +11,7 @@ from Crypto.PublicKey import RSA
 
 from KeyExchange import *
 from Common import *
-from Certificate import Certificate, load_root_CAs
+from Certificate import Certificate, load_root_CAs, root_CA
 from BlockCipher import AES_CBC, AES_GCM
 from CipherSuites import *
 
@@ -104,7 +103,7 @@ class TLS:
 
 	def P_hash(self, secret, seed, size):
 	    A = seed
-	    result = ''
+	    result = b''
 	    while size > 0:
 	        A = self.HMAC_hash(secret, A)
 	        result += self.HMAC_hash(secret, A+seed)
@@ -116,14 +115,14 @@ class TLS:
 	    return self.P_hash(secret, label+seed, size)[0:size]
 
 	def handle_alert(self, msg):
-		alert = "TLS Server Alert: " + TLS_alert[to_int(msg[1])]
+		alert = "TLS Server Alert: " + TLS_alert[bytes_to_int(msg[1])]
 		if msg[0] == '\x02':
 			raise Exception(alert)
 		else:
 			print(alert)
 
 	def TLS_record(self, content_type, message):
-		return chr(content_type) + to_bytes(0x0303) + to_n_bytes(len(message), 2) + message
+		return nb_to_bytes(content_type) + nb_to_bytes(0x0303) + nb_to_n_bytes(len(message), 2) + message
 
 
 	# Client Hello message
@@ -131,21 +130,21 @@ class TLS:
 		client_hello = '010001fc03035716eaceec93895c4a18d31c5f379bb305b432082939b83ee09f9a96babe0a400000'
 
 		if self.cipher_suite_code is None:
-			client_hello += to_hex(to_bytes(cipher_suites.count()*2)) + ''.join(cipher_suites.keys())
+			client_hello += bytes_to_hex(nb_to_bytes(cipher_suites.count()*2)) + ''.join(cipher_suites.keys())
 		else:
 			client_hello += '02' + self.cipher_suite_code
 
 		client_hello += '0100'
-		client_hello = client_hello.decode('hex')
+		client_hello = hex_to_bytes(client_hello)
 
 		self.client_random = client_hello[6:6+32]
 
-		TLS_extension_renegotiation_info = 'ff01000100'.decode('hex')
+		TLS_extension_renegotiation_info = hex_to_bytes('ff01000100')
 		hostname_len = len(self.ip[0])
-		TLS_extension_server_name = '\x00\x00' + to_n_bytes(hostname_len+5, 2) + to_n_bytes(hostname_len+3, 2) + '\x00' + to_n_bytes(hostname_len, 2) + self.ip[0]
-		TLS_extension_signature_algorithms = '000d0012001006010603050105030401040302010203'.decode('hex')
-		TLS_extension_ec_point_formats = '000b00020100'.decode('hex')
-		TLS_extension_elliptic_curves = '000a0006000400170018'.decode('hex')
+		TLS_extension_server_name = b'\x00\x00' + nb_to_n_bytes(hostname_len+5, 2) + nb_to_n_bytes(hostname_len+3, 2) + b'\x00' + nb_to_n_bytes(hostname_len, 2) + str_to_bytes(self.ip[0])
+		TLS_extension_signature_algorithms = hex_to_bytes('000d0012001006010603050105030401040302010203')
+		TLS_extension_ec_point_formats = hex_to_bytes('000b00020100')
+		TLS_extension_elliptic_curves = hex_to_bytes('000a0006000400170018')
 
 		TLS_extensions = \
 			TLS_extension_renegotiation_info + \
@@ -155,9 +154,9 @@ class TLS:
 			TLS_extension_elliptic_curves
 
 		padding_length = 512 - 2 - len(client_hello) - len(TLS_extensions) - 4
-		padding = '\x00\x15' + to_n_bytes(padding_length, 2) + '\x00' * padding_length
+		padding = b'\x00\x15' + nb_to_n_bytes(padding_length, 2) + b'\x00' * padding_length
 
-		client_hello = client_hello + to_n_bytes(512 - 2 - len(client_hello), 2) + TLS_extensions + padding
+		client_hello = client_hello + nb_to_n_bytes(512 - 2 - len(client_hello), 2) + TLS_extensions + padding
 
 		self.handshake_messages.append(client_hello)
 		msg = self.TLS_record(TLS_HANDSHAKE, client_hello)
@@ -170,7 +169,7 @@ class TLS:
 		bytes_received = 0
 		need_to_download_more = True
 
-		server_msg = ''
+		server_msg = b''
 		idx = 0
 
 		while bytes_received < bytes_expected or need_to_download_more:
@@ -179,20 +178,20 @@ class TLS:
 			bytes_received += len(msg)
 
 			while idx < bytes_received:
-				size = to_int(server_msg[idx+3:idx+5])
+				size = bytes_to_int(server_msg[idx+3:idx+5])
 				bytes_expected += size + 5
 				while bytes_received < bytes_expected:
 					msg = self.sock.recv(65536)
 					server_msg += msg
 					bytes_received += len(msg)
 
-				if to_int(server_msg[idx]) == TLS_ALERT:
+				if bytes_to_int(server_msg[idx:idx+1]) == TLS_ALERT:
 					self.handle_alert(server_msg[idx+5:idx+7])
 
-#				print('Content type: %d' % to_int(server_msg[idx]))
+#				print('Content type: %d' % bytes_to_int(server_msg[idx]))
 	#			print('Size: ', size)
-				subtype = to_int(server_msg[idx+5])
-				subsize = to_int(server_msg[idx+6:idx+8])
+				subtype = bytes_to_int(server_msg[idx+5])
+				subsize = bytes_to_int(server_msg[idx+6:idx+8])
 	#			print('Subcontent type: %d' % subtype)
 	#			print('Size: ', subsize)
 
@@ -205,18 +204,18 @@ class TLS:
 				idx += size + 5
 	#			print('')
 
-		server_hello = next(msg for msg in self.handshake_messages if msg[0] == chr(TLS_SERVER_HELLO))
+		server_hello = next(msg for msg in self.handshake_messages if bytes_to_int(msg[0]) == TLS_SERVER_HELLO)
 		self.server_random = server_hello[6:6+32]
-		server_key_exchange = next((msg for msg in self.handshake_messages if msg[0] == chr(TLS_SERVER_KEY_EXCHANGE)), None)
-		server_certificate = next((msg for msg in self.handshake_messages if msg[0] == chr(TLS_CERTIFICATE)), None)
+		server_key_exchange = next((msg for msg in self.handshake_messages if bytes_to_int(msg[0]) == TLS_SERVER_KEY_EXCHANGE), None)
+		server_certificate = next((msg for msg in self.handshake_messages if bytes_to_int(msg[0]) == TLS_CERTIFICATE), None)
 		if server_certificate is None:
 			raise Exception('No SSL Certificate received from the server')
 
 		self.certificate = Certificate(server_certificate[7:])
 
-		session_ID_length = to_int(server_hello[38])
+		session_ID_length = bytes_to_int(server_hello[38])
 
-		cipher_suite_code = server_hello[39+session_ID_length:41+session_ID_length].encode('hex')
+		cipher_suite_code = bytes_to_hex(server_hello[39+session_ID_length:41+session_ID_length])
 		self.cipher_suite = cipher_suites.get(cipher_suite_code)
 		print('Cipher suite: ' + self.cipher_suite.name)
 		self.key_exchange = self.cipher_suite.key_exchange(server_key_exchange if server_key_exchange is not None else self.certificate)
@@ -230,16 +229,16 @@ class TLS:
 		# Diffie-Hellman key exchange - start with verifying the key exchange parameters
 		else:
 			signed_data = self.client_random + self.server_random + server_key_exchange[4:-260]
-			algo_code = server_key_exchange[-260]
-			if algo_code == '\x06':
+			algo_code = server_key_exchange[-260:-259]
+			if algo_code == b'\x06':
 				algo = SHA512
-			elif algo_code == '\x05':
+			elif algo_code == b'\x05':
 				algo = SHA384
-			elif algo_code == '\x04':
+			elif algo_code == b'\x04':
 				algo = SHA256
-			elif algo_code == '\x03':
+			elif algo_code == b'\x03':
 				algo = SHA224
-			elif algo_code == '\x02':
+			elif algo_code == b'\x02':
 				algo = SHA
 			else:
 				algo = SHA
@@ -253,28 +252,23 @@ class TLS:
 		self.handshake_messages.append(client_key_exchange)
 		self.client_key_exchange_msg = self.TLS_record(TLS_HANDSHAKE, client_key_exchange)
 
-		self.master_secret = self.PRF(to_bytes(self.premaster_secret), "master secret", self.client_random + self.server_random, 48)
+		self.master_secret = self.PRF(nb_to_bytes(self.premaster_secret), b"master secret", self.client_random + self.server_random, 48)
 
-		# TESTING GCM
-#		self.master_secret = '2FB179AB70CD4CA2C1285B4B1E294F8F44B7E8DA26B62D00EE35181575EAB04C4FA11C0DA3ABABB4AF8D09ACB4CCC3CD'.decode('hex')
-#		self.client_random = '375f5632ba9075b88dd83eeeed4adb427d4011298efb79fb2bf78f4a4b7d9d95'.decode('hex')
-#		self.server_random = '5a1b3957e3bd1644e7083e25c64f137ed2803b680e43395a82e5b302b64ba763'.decode('hex')
-
-		keys = self.PRF(self.master_secret, "key expansion", self.server_random + self.client_random, self.cipher_suite.msg_auth.digest_size*2 + 32 + 32)
+		keys = self.PRF(self.master_secret, b"key expansion", self.server_random + self.client_random, self.cipher_suite.msg_auth.digest_size*2 + 32 + 32)
 
 		self.BlockCipher = self.cipher_suite.block_cipher(keys=keys, key_size=self.cipher_suite.key_size, hash=self.cipher_suite.msg_auth)
 
 
 	def send_client_change_cipher_suite(self):
-		self.client_change_cipher_spec_msg = self.TLS_record(TLS_CHANGE_CIPHER_SPEC, '01'.decode('hex'))
+		self.client_change_cipher_spec_msg = self.TLS_record(TLS_CHANGE_CIPHER_SPEC, b'\x01')
 
 
 	def send_client_encrypted_handshake(self):
-		handshake = ''.join(self.handshake_messages)
+		handshake = b''.join(self.handshake_messages)
 		h = self.PRF_hash.new()
 		h.update(handshake)
 
-		client_handshake_hash_computed = '\x14\x00\x00\x0c' + self.PRF(self.master_secret, "client finished", h.digest(), 12)
+		client_handshake_hash_computed = b'\x14\x00\x00\x0c' + self.PRF(self.master_secret, b"client finished", h.digest(), 12)
 		self.handshake_messages.append(client_handshake_hash_computed)
 
 		client_encrypted_handshake = self.BlockCipher.encrypt(client_handshake_hash_computed, seq_num=0, content_type=TLS_HANDSHAKE)
@@ -291,11 +285,11 @@ class TLS:
 		bytes_received = len(server_msg)
 
 		while idx < bytes_received:
-			size = to_int(server_msg[idx+3:idx+5])
+			size = bytes_to_int(server_msg[idx+3:idx+5])
 
-#			print('Content type: %d' % to_int(server_msg[idx]))
+#			print('Content type: %d' % bytes_to_int(server_msg[idx]))
 
-			if to_int(server_msg[idx]) == TLS_ALERT:
+			if bytes_to_int(server_msg[idx]) == TLS_ALERT:
 				self.handle_alert(server_msg[idx+5:idx+7])
 
 			idx += size + 5			
@@ -304,15 +298,14 @@ class TLS:
 	def sends_GET_request(self):
 		plaintext = 'GET / HTTP/1.1\r\nHOST: ' + self.ip[0] + '\r\n\r\n'
 		print("Sending [" + plaintext + "]")
-		ciphertext = self.BlockCipher.encrypt(plaintext, seq_num=1, content_type=TLS_APPLICATION_DATA)
+		ciphertext = self.BlockCipher.encrypt(str_to_bytes(plaintext), seq_num=1, content_type=TLS_APPLICATION_DATA)
 
 		client_data_msg = self.TLS_record(TLS_APPLICATION_DATA, ciphertext)
 		self.sock.sendall(client_data_msg)
 
 	def receive_HTML_response(self):
-		print('')
 		data = []
-		app_data = ''
+		app_data = b''
 		plaintext_downloaded = 0
 
 		bytes_expected = 0
@@ -323,13 +316,15 @@ class TLS:
 		idx = 0
 		seq_num = 1
 
+		self.response = ''
+
 		while bytes_received < bytes_expected or need_to_download_more:
 			msg = self.sock.recv(65536)
 			app_data += msg
 			bytes_received += len(msg)
 
 			while idx < bytes_received:
-				size = to_int(app_data[idx+3:idx+5])
+				size = bytes_to_int(app_data[idx+3:idx+5])
 	#			print('Size: %d' % size)
 				bytes_expected += size + 5
 				while bytes_received < bytes_expected:
@@ -338,7 +333,7 @@ class TLS:
 					bytes_received += len(msg)
 
 				# Decrypt
-				plaintext = self.BlockCipher.decrypt(app_data[idx+5:idx+5+size], seq_num=seq_num, content_type=TLS_APPLICATION_DATA)
+				plaintext = bytes_to_str(self.BlockCipher.decrypt(app_data[idx+5:idx+5+size], seq_num=seq_num, content_type=TLS_APPLICATION_DATA))
 				seq_num += 1
 
 				if content_length is None:
@@ -352,10 +347,10 @@ class TLS:
 							size_hex = plaintext[start:end]
 							if (len(size_hex) % 2 == 1):
 								size_hex = '0' + size_hex
-							content_length = to_int(size_hex.decode('hex'))
+							content_length = bytes_to_int(hex_to_bytes(size_hex))
 							start = end
 						except:
-							print(plaintext)
+							self.response = plaintext
 							return
 
 					else:
@@ -372,10 +367,8 @@ class TLS:
 					need_to_download_more = False
 
 				idx += size + 5
-				print('')
 
-		for plaintext in data:
-			print(plaintext)
+		self.response = ''.join(data)
 
 
 ########################################################################
@@ -386,41 +379,45 @@ f.close()
 
 load_root_CAs(root_CAs)
 
-hostname = None
-port = 443
-cipher = None
+if __name__ == '__main__':
+	hostname = None
+	port = 443
+	cipher = None
 
-is_next = 'hostname'
+	is_next = 'hostname'
 
-for arg in sys.argv[1:]:
-	if arg == '-cipher' or arg == '-c':
-		is_next = 'cipher'
-	else:
-		if is_next == 'hostname':
-			hostname = arg
-			is_next = port
-		elif is_next == 'port':
-			port = int(arg)
-			is_next = None
-		elif is_next == 'cipher':
-			cipher = next((k for k, c in cipher_suites.items() if c.name == arg), None)
-			if cipher is None:
-				print('Unknown cipher suite: %s' % arg)
-				print('')
-				print("Cipher suites supported:")
-				for cipher in cipher_suites.itervalues():
-					print('- ' + cipher.name)
-				print('')				
-				quit()
-			is_next = 'hostname'
+	for arg in sys.argv[1:]:
+		if arg == '-cipher' or arg == '-c':
+			is_next = 'cipher'
+		else:
+			if is_next == 'hostname':
+				hostname = arg
+				is_next = port
+			elif is_next == 'port':
+				port = int(arg)
+				is_next = None
+			elif is_next == 'cipher':
+				cipher = next((k for k, c in cipher_suites.items() if c.name == arg), None)
+				if cipher is None:
+					print('Unknown cipher suite: %s' % arg)
+					print('')
+					print("Cipher suites supported:")
+					for cipher in cipher_suites.values():
+						print('- ' + cipher.name)
+					print('')				
+					quit()
+				is_next = 'hostname'
 
-if hostname is None:
-	print('%s [-cipher <cipher suite>] <hostname> [port]' % sys.argv[0])
-	print('')
-	print("Cipher suites supported:")
-	for cipher in cipher_suites.values():
-		print('- ' + cipher.name)
-	print('')	
-	quit()
+	if hostname is None:
+		print('%s [-cipher <cipher suite>] <hostname> [port]' % sys.argv[0])
+		print('')
+		print("Cipher suites supported:")
+		for cipher in cipher_suites.values():
+			print('- ' + cipher.name)
+		print('')	
+		quit()
 
-t = TLS(hostname, port, cipher)
+	print(cipher)
+
+	t = TLS(hostname, port, cipher)
+#	print(t.response)
