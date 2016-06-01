@@ -139,8 +139,8 @@ class Certificate:
 				self.domain = '.'.join(self.domain.split('.')[1:])
 				domain = '.'.join(domain.split('.')[1:])
 
-#			if self.domain != domain:
-#				raise Exception("Error: wrong domain: %s != %s" % (self.domain, domain))
+			if self.domain != domain:
+				print("WARNING: wrong domain: %s != %s" % (self.domain, domain))
 
 		if self.algorithm not in RSA_algorithms:
 			raise Exception("Unknown SSL Certificate verification algorithm: %s" % bytes_to_hex(self.algorithm))

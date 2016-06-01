@@ -76,7 +76,6 @@ class TLS:
 
 		try:
 			self.sock.connect(self.ip)
-			print("Connected to server: %s" % (self.ip,))
 			self.send_client_hello()
 			self.receive_server_hello()
 			self.send_client_key_exchange()
@@ -87,13 +86,12 @@ class TLS:
 			self.receive_HTML_response()
 
 		except socket.timeout as te:
-			print("Failed to open connection to server: %s" % (self.ip,))
+			print("Failed to open connection to server: %s port %d" % (self.ip, self.port))
 		except Exception as e:
 			traceback.print_exc()
 			print(e)
 		finally:
 			print('')
-			print("Closing the connection")
 			self.sock.close()
 
 	def HMAC_hash(self, secret, val):
@@ -283,6 +281,7 @@ class TLS:
 		server_msg = self.sock.recv(65536)
 		idx = 0
 		bytes_received = len(server_msg)
+		server_handshake = b''
 
 		while idx < bytes_received:
 			size = bytes_to_int(server_msg[idx+3:idx+5])
@@ -291,13 +290,36 @@ class TLS:
 
 			if bytes_to_int(server_msg[idx]) == TLS_ALERT:
 				self.handle_alert(server_msg[idx+5:idx+7])
+			elif bytes_to_int(server_msg[idx]) == TLS_HANDSHAKE:
+				handshake_size = bytes_to_int(server_msg[idx+3:idx+5])
+				server_encrypted_handshake = server_msg[idx+5:idx+5+handshake_size]
 
-			idx += size + 5			
+			idx += size + 5
 
+		# Decrypt the server handshake hash
+		try:
+			server_handshake_hash = self.BlockCipher.decrypt(server_encrypted_handshake, seq_num=0, content_type=TLS_HANDSHAKE)
+
+			# Compute the expected server handshake hash
+			handshake = b''.join(self.handshake_messages)
+			h = self.PRF_hash.new()
+			h.update(handshake)
+			server_handshake_hash_computed = b'\x14\x00\x00\x0c' + self.PRF(self.master_secret, b"server finished", h.digest(), 12)
+
+			# Compare the two values
+			if server_handshake_hash_computed != server_handshake_hash:
+				print("WARNING: invalid Server Encrypted Handshake Message")
+				print("Sent by the server: " + bytes_to_hex(server_handshake_hash))
+				print("Expected: " + bytes_to_hex(server_handshake_hash_computed))
+			else:
+				print("Server Encrypted Handhsake Message OK")
+
+		except Exception as e:
+			print("WARNING: error when trying to decrypt the Server Encrypted Handshake Message: " + e.message)
 
 	def sends_GET_request(self):
 		plaintext = 'GET / HTTP/1.1\r\nHOST: ' + self.ip[0] + '\r\n\r\n'
-		print("Sending [" + plaintext + "]")
+#		print("Sending [" + plaintext + "]")
 		ciphertext = self.BlockCipher.encrypt(str_to_bytes(plaintext), seq_num=1, content_type=TLS_APPLICATION_DATA)
 
 		client_data_msg = self.TLS_record(TLS_APPLICATION_DATA, ciphertext)
@@ -392,7 +414,7 @@ if __name__ == '__main__':
 		else:
 			if is_next == 'hostname':
 				hostname = arg
-				is_next = port
+				is_next = 'port'
 			elif is_next == 'port':
 				port = int(arg)
 				is_next = None
@@ -417,7 +439,5 @@ if __name__ == '__main__':
 		print('')	
 		quit()
 
-	print(cipher)
-
 	t = TLS(hostname, port, cipher)
-#	print(t.response)
+	print(t.response)

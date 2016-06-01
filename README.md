@@ -34,4 +34,3 @@ It is also checking the validity of the whole SSL certificate chain, down to its
 #### Future improvements
 
 - Better management of HTTP response
-- Verification of the server-sent MAC and Encrypted Handshake Message
